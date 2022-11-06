@@ -1,0 +1,123 @@
+---
+- name: deploy laravel on remote server
+  hosts: webserver
+  become: true
+  become_user: root
+  vars:
+
+  tasks:
+        - name: install dependencies
+          apt:
+                  name:
+                          - apache2
+                          - wget
+                          - git
+                          - curl
+                  state: latest
+
+        - name: install php dependencies
+          shell: |
+                  apt install software-properties-common
+                  add-apt-repository ppa:ondrej/apache2 -y
+                  add-apt-repository ppa:ondrej/php -y
+                  apt -y install lsb-release apt-transport-https ca-certificates
+                  apt-get install apt-transport-https gnupg2 ca-certificates -y
+                  apt install -y php8.1-common php8.1-cli -y
+
+        - name: install php
+          shell: |
+                 apt install libapache2-mod-php php8.1-mysql php8.1-xml php8.1-curl php8.1-cgi php8.1-xsl php8.1-gd php8.1-mbstring php8.1-zip php8.1-xmlrpc php8.1-soap php8.1-intl -y
+
+        - name: install mysql
+          shell: |
+                  apt update
+                  apt upgrade -y
+                  apt install mysql-server -y
+                  service mysql start
+
+        - name: confirm running DB
+          service: name=mysql state=started enabled=true
+
+        - name: install python mysql
+          apt:
+                  name: python3-mysqldb
+                  state: latest
+
+        - name: create new Database
+          mysql_db: name=laravel_db state=present login_user=root login_password=
+
+        - name: transfer Postgressql script
+          copy:
+                  src: /home/ubuntu/ansible/pgsql.sh
+                  dest: /
+
+        - name: Execute script
+          shell: |
+                  bash /pgsql.sh
+
+        - name: create directory
+          file:
+                  path: /var/www/project/laravel-jahswill
+                  state: directory
+
+        - name: Clone laravel repo
+          git:
+              repo: https://github.com/f1amy/laravel-realworld-example-app.git
+              dest: /var/www/project/laravel-jahswill
+              clone: yes
+              update: yes
+
+        - name: config web.php
+          copy:
+                  src: /home/ubuntu/ansible/web.php
+                  dest: /var/www/project/laravel-jahswill/routes/web.php
+                  force: yes
+
+        - name: config env
+          copy:
+                  src: /home/ubuntu/ansible/.env
+                  dest: /var/www/project/laravel-jahswill
+                  force: yes
+
+
+        - name: Install composer
+          shell: |
+                  curl -sS https://getcomposer.org/installer | php
+                  mv composer.phar /usr/local/bin/composer
+                  chmod +x /usr/local/bin/composer
+
+
+        - name: Executable
+          file:
+                  path: /usr/local/bin/composer
+                  mode: a+x
+                  state: file
+
+        - name: composer
+          become: false
+          composer:
+                  command: install
+                  global_command: false
+                  working_dir: /var/www/project/laravel-jahswill
+
+        - name: install artisans
+          shell: |
+                  php artisan key:generate /var/www/project/laravel-jahswill
+                  php artisan config:cache /var/www/project/laravel-jahswill
+                  php artisan migrate:fresh /var/www/project/laravel-jahswill
+                  php artisan migrate --seed /var/www/project/laravel-jahswill
+          ignore_errors:  true
+
+        - name: Configure Apache to host
+          copy:
+                  src: /home/ubuntu/ansible/project.conf
+                  dest: /etc/apache2/sites-available
+
+        - name: apache config
+          shell: |
+                  a2enmod rewrite
+                  a2dissite 000-default.conf
+                  a2ensite project.conf
+
+        - name: apache restart
+          command: systemctl restart apache2
